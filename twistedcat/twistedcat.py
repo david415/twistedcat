@@ -18,7 +18,10 @@ class ProxyEndpointProtocol(Proxy):
             self.peer.transport.registerProducer(self.transport, True)
 
             self.peer.transport.resumeProducing()
-        
+
+    def connectionLost(self, reason):
+        self.transport.loseConnection()
+
 class ProxyEndpointProtocolFactory(protocol.Factory):
 
     protocol = ProxyEndpointProtocol
@@ -37,6 +40,15 @@ class ProxyEndpointProtocolFactory(protocol.Factory):
             self.protocolInstance.setPeer(self.peerFactory.protocolInstance)
 
         return self.protocolInstance
+
+
+
+class EndpointCombinator(object):
+
+    def __init__(self, endpoint1, endpoint2):
+        pass
+
+
 
 
 # twistedcat - twisted endpoint concatenator
