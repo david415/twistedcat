@@ -3,81 +3,111 @@
 from twisted.internet.endpoints import clientFromString, serverFromString
 from twisted.internet import reactor, protocol
 from twisted.protocols.portforward import Proxy, ProxyClient
+import argparse
+import sys
 
-
-class ProxyClientEndpointFactory(protocol.Factory, object):
-
-    protocol = ProxyClient
-
-    def setServer(self, server):
-        print "ProxyClientEndpointFactory.__init__"
-        self.server = server
-
-    def buildProtocol(self, *args, **kw):
-        print "ProxyClientEndpointFactory.buildProtocol"
-        prot = protocol.Factory.buildProtocol(self, *args, **kw)
-        prot.setPeer(self.server)
-        return prot
-
-class ProxyServerEndpointProtocol(Proxy):
-    """server endpoint to client endpoint proxy
-    """
-    clientEndpointProtocolFactory = ProxyClientEndpointFactory
-    reactor = None
+class ProxyEndpointProtocol(Proxy):
 
     def connectionMade(self):
-        print "ProxyServerEndpointProtocol.connectionMade"
-        # Don't read anything from the connecting client until we have
-        # somewhere to send it to.
-        self.transport.pauseProducing()
-    
-        self.client = self.clientEndpointProtocolFactory()
-        self.client.setServer(self)
+        if self.factory.peerFactory.protocolInstance is None:
+            self.transport.pauseProducing()
+        else:
+            self.peer.setPeer(self)
 
-        if self.reactor is None:
-            from twisted.internet import reactor
-            self.reactor = reactor
-        self.clientEndpoint = clientFromString(self.reactor, self.factory.clientEndpointDescriptor)
-        self.connectDeferred = self.clientEndpoint.connect(self.client)
-        self.connectDeferred.addErrback(lambda r: self.clientConnectionFailed(f, r))
-                
-    def clientConnectionFailed(self, factory, reason):
-        print "ProxyServerEndpointProtocol.clientConnectionFailed %s %s" % (factory, reason)
-        self.transport.loseConnection()
+            self.transport.registerProducer(self.peer.transport, True)
+            self.peer.transport.registerProducer(self.transport, True)
 
-class ProxyServerEndpointProtocolFactory(protocol.Factory):
+            self.peer.transport.resumeProducing()
+        
+class ProxyEndpointProtocolFactory(protocol.Factory):
 
-    protocol = ProxyServerEndpointProtocol
+    protocol = ProxyEndpointProtocol
 
-    def __init__(self, clientEndpointDescriptor):
-        print "ProxyEndpointProtocolFactory.__init__"
-        self.clientEndpointDescriptor = clientEndpointDescriptor
+    def __init__(self):
+        self.peerFactory = None
+        self.protocolInstance = None
+
+    def setPeerFactory(self, peerFactory):
+        self.peerFactory = peerFactory
+
+    def buildProtocol(self, *args, **kw):
+        self.protocolInstance = protocol.Factory.buildProtocol(self, *args, **kw)
+
+        if self.peerFactory.protocolInstance is not None:
+            self.protocolInstance.setPeer(self.peerFactory.protocolInstance)
+
+        return self.protocolInstance
 
 
-# twistedcat - endpoint plumber
+# twistedcat - twisted endpoint concatenator
 
 def main():
 
-    # client to server twisted endpoint proxy
+    servers = None
+    clients = None
+    num_servers = 0
 
-    # TODO: parse commandline args instead of hardcoding
-    serverEndpointDescriptor = 'stdio:'
-    clientEndpointDescriptor = 'tcp:127.0.0.1:1666'
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-s', '--server', type=str, action="append", nargs='+', dest='server', help='server endpoint accumulator')
+    parser.add_argument('client', action="append", nargs='*')
+    args = parser.parse_args()
 
-    serverEndpoint = serverFromString(reactor, serverEndpointDescriptor)
-    serverProxyFactory = ProxyServerEndpointProtocolFactory(clientEndpointDescriptor)    
-    listeningPortDeferred = serverEndpoint.listen(serverProxyFactory)
+    if args.server is not None:
+        num_servers += len(args.server)
+        servers = map(lambda x:x[0], args.server)
 
-    # XXX
-    #listeningPortDeferred.addCallback(serverProxyFactory.setListeningPort)
+    if num_servers + len(args.client[0]) != 2:
+        parser.print_help()
+        sys.exit(1)
 
-    def setup_complete(port):
-        print "setup_complete %s" % port.getHost()
-    def setup_failed(arg):
-        print "SETUP FAILED", arg
+    if len(args.client[0]) != 0:
+        clients = args.client[0]
 
-    listeningPortDeferred.addCallback(setup_complete)
-    listeningPortDeferred.addErrback(setup_failed)
+    if servers is not None and clients is not None:
+        serverEndpointDescriptor = servers[0]
+        clientEndpointDescriptor = clients[0]
+
+        serverEndpoint = serverFromString(reactor, serverEndpointDescriptor)
+        clientEndpoint = clientFromString(reactor, clientEndpointDescriptor)
+
+        clientEndpointFactory = ProxyEndpointProtocolFactory()
+        serverEndpointFactory = ProxyEndpointProtocolFactory()
+
+        clientEndpointFactory.setPeerFactory(serverEndpointFactory)
+        serverEndpointFactory.setPeerFactory(clientEndpointFactory)
+
+        connectDeferred = clientEndpoint.connect(clientEndpointFactory)
+        listeningPortDeferred = serverEndpoint.listen(serverEndpointFactory)
+    elif servers is None and clients is not None:
+        clientEndpointDescriptor1 = clients[0]
+        clientEndpointDescriptor2 = clients[1]
+
+        clientEndpoint1 = clientFromString(reactor, clientEndpointDescriptor1)
+        clientEndpoint2 = clientFromString(reactor, clientEndpointDescriptor2)
+
+        clientEndpointFactory1 = ProxyEndpointProtocolFactory()
+        clientEndpointFactory2 = ProxyEndpointProtocolFactory()
+
+        clientEndpointFactory1.setPeerFactory(clientEndpointFactory2)
+        clientEndpointFactory2.setPeerFactory(clientEndpointFactory1)
+
+        clientEndpoint1.connect(clientEndpointFactory1)
+        clientEndpoint2.connect(clientEndpointFactory2)
+    else:
+        serverEndpointDescriptor1 = servers[0]
+        serverEndpointDescriptor2 = servers[1]
+
+        serverEndpoint1 = serverFromString(reactor, serverEndpointDescriptor1)
+        serverEndpoint2 = serverFromString(reactor, serverEndpointDescriptor2)
+
+        serverEndpointFactory1 = ProxyEndpointProtocolFactory()
+        serverEndpointFactory2 = ProxyEndpointProtocolFactory()
+
+        serverEndpointFactory1.setPeerFactory(serverEndpointFactory2)
+        serverEndpointFactory2.setPeerFactory(serverEndpointFactory1)
+
+        listeningPortDeferred1 = serverEndpoint1.listen(serverEndpointFactory1)
+        listeningPortDeferred2 = serverEndpoint2.listen(serverEndpointFactory2)
 
     reactor.run()
 
