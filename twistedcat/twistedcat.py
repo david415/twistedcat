@@ -22,8 +22,6 @@ class ProxyEndpointProtocol(Proxy):
             self.peer.transport.resumeProducing()
 
     def connectionLost(self, reason):
-        # XXX
-        #self.peer.transport.loseConnection()
         self.transport.loseConnection()
 
         if self.factory.handleLostConnection is not None:
@@ -83,9 +81,6 @@ class EndpointCrossOver(object):
         self.endpoint1 = endpoint1
         self.endpoint2 = endpoint2
         self.handleError = handleError
-
-    def appendListeningPort(self, port):
-        self.listeningPorts.append(port)
 
     def _openEndpoint(self, endpoint, factory):
         if IStreamClientEndpoint.providedBy(endpoint):
