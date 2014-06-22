@@ -54,12 +54,16 @@ def maybeClientFromString(reactor, endpointDescriptor):
         endpoint = clientFromString(reactor, endpointDescriptor)
     except TypeError, e:
         endpoint = None
+    except ValueError, e:
+        endpoint = None
     return endpoint
 
 def maybeServerFromString(reactor, endpointDescriptor):
     try:
         endpoint = serverFromString(reactor, endpointDescriptor)
     except TypeError, e:
+        endpoint = None
+    except ValueError, e:
         endpoint = None
     return endpoint
 
