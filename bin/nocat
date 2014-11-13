@@ -1,0 +1,49 @@
+#!/usr/bin/env python
+
+from twisted.internet.endpoints import clientFromString, serverFromString
+from twisted.internet import reactor
+
+from twistedcat import EndpointCrossOver
+
+import argparse
+import sys
+
+
+
+# twistedcat - twisted endpoint concatenator
+
+def main():
+
+    servers = None
+    clients = None
+    num_servers = 0
+
+    parser = argparse.ArgumentParser(description='twistedcat - proxy between any two Twisted endpoints')
+    parser.add_argument("-c", "--client", action='append', default=[], help="Twisted client endpoint descriptor string")
+    parser.add_argument("-s", "--server", action='append', default=[], help="Twisted server endpoint descriptor string")
+    args = parser.parse_args()
+
+    if (len(args.server) + len(args.client)) != 2:
+        parser.print_help()
+        sys.exit(1)
+
+    endpoints = []
+
+    for endpointDescriptor in args.server:
+        endpoints.append(serverFromString(reactor, endpointDescriptor))
+
+    for endpointDescriptor in args.client:
+        endpoints.append(clientFromString(reactor, endpointDescriptor))
+
+    def handle_error():
+        print "EndpointCrossOver fail"
+        if reactor.running:
+            reactor.stop()
+
+    endpoint_pipe = EndpointCrossOver(endpoints[0], endpoints[1], handleError=handle_error)
+    endpoint_pipe.join()
+    reactor.run()
+
+
+if __name__ == '__main__':
+    main()
