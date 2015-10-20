@@ -22,7 +22,7 @@ GETINFO traffic/read
 GETINFO traffic/written
 250-traffic/written=
 GETCONF ControlPort
-250 ControlPort=9951
+250 ControlPort=
 """.strip().split("\n")
 
 REPLACEMENTS = {
