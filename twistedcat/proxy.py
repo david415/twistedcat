@@ -1,6 +1,5 @@
 from twisted.protocols import basic
-from twisted.internet import protocol
-from twisted.internet.interfaces import IStreamClientEndpoint, IStreamServerEndpoint
+from twisted.internet import protocol, defer
 
 ALLOWED = """
 PROTOCOLINFO
@@ -75,16 +74,17 @@ class LineProxyEndpointProtocol(basic.LineReceiver):
             self.peer.transport.resumeProducing()
 
     def connectionLost(self, reason):
+        print "connectionLost %r" % (reason,)
         self.transport.loseConnection()
-
         if self.factory.handleLostConnection is not None:
             self.factory.handleLostConnection(reason)
+        return reason
 
 class ProxyEndpointProtocolFactory(protocol.Factory):
 
     protocol = LineProxyEndpointProtocol
 
-    def __init__(self, handleLostConnection=None, label=None):
+    def __init__(self, handleLostConnection, label=None):
         self.peerFactory = None
         self.protocolInstance = None
         self.handleLostConnection = handleLostConnection
@@ -110,12 +110,25 @@ class EndpointServerProxy(object):
         self.start_server()
 
     def start_server(self):
-        self.server_factory = ProxyEndpointProtocolFactory(handleLostConnection=self.handle_error, label="tor-control-client")
-        self.client_factory = ProxyEndpointProtocolFactory(handleLostConnection=self.handle_error, label="server")
-        self.server_factory.setPeerFactory(self.client_factory)
-        self.client_factory.setPeerFactory(self.server_factory)
-        self.server_d = self.server_endpoint.listen(self.server_factory)
-        self.client_d = self.client_endpoint.connect(self.client_factory)
+        server_lost_d = defer.Deferred()
+        client_lost_d = defer.Deferred()
+        self.proxy_conn_d = defer.DeferredList([server_lost_d, client_lost_d])
+        def restart(result):
+            self.server_d.cancel()
+            self.client_d.cancel()
+            self.start_server()
+        self.proxy_conn_d.addCallback(restart)
 
-    def handle_error(self, failure):
-        print "handle_error: failure: %r" % (failure,)
+        def handle_server_lost_connection(f):
+            print "handle_server_lost_connection %r" % (f,)
+            server_lost_d.callback(None)
+        def handle_client_lost_connection(f):
+            print "handle_client_lost_connection %r" % (f,)
+            client_lost_d.callback(None)
+
+        server_factory = ProxyEndpointProtocolFactory(handle_server_lost_connection, label="tor-control-client")
+        client_factory = ProxyEndpointProtocolFactory(handle_client_lost_connection, label="server")
+        server_factory.setPeerFactory(client_factory)
+        client_factory.setPeerFactory(server_factory)
+        self.server_d = self.server_endpoint.listen(server_factory)
+        self.client_d = self.client_endpoint.connect(client_factory)
