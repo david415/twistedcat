@@ -6,7 +6,6 @@ ALLOWED = """
 PROTOCOLINFO
 250-PROTOCOLINFO 1
 250-AUTH METHODS=COOKIE,SAFECOOKIE COOKIEFILE="/var/run/tor/control.authcookie"
-250-VERSION Tor="0.2.6.10"
 250 OK
 """.strip().split("\n")
 
@@ -33,9 +32,7 @@ REPLACEMENTS = {
 FILTER = True
 
 class LineProxyEndpointProtocol(basic.LineReceiver):
-    noisy = True
     peer = None
-    label = None
 
     def setPeer(self, peer):
         self.peer = peer
@@ -43,11 +40,11 @@ class LineProxyEndpointProtocol(basic.LineReceiver):
     def lineReceived(self, line):
         allow = False
         if FILTER == False:
-            print "%s: %r" % (self.label, line)
+            print "%s: %r" % (self.factory.label, line)
             self.peer.transport.write(line + self.delimiter)
             return
         if line in REPLACEMENTS:
-            print "%s replacing %r with %r" % (self.label, line, REPLACEMENTS[line])
+            print "%s replacing %r with %r" % (self.factory.label, line, REPLACEMENTS[line])
             line = REPLACEMENTS[line]
             allow = True
         elif line in ALLOWED:
@@ -58,11 +55,11 @@ class LineProxyEndpointProtocol(basic.LineReceiver):
                     allow = True
                     break
         if allow:
-            print "%s allowed: %r" % (self.label, line,)
+            print "%s allowed: %r" % (self.factory.label, line,)
             self.peer.transport.write(line + self.delimiter)
         else:
-            print "%s filtered: %r" % (self.label, line,)
-            if self.label == "A":
+            print "%s filtered: %r" % (self.factory.label, line,)
+            if self.factory.label == "tor-control-client":
                 print "sending 510"
                 self.sendLine("510 Command filtered")
 
@@ -81,9 +78,7 @@ class LineProxyEndpointProtocol(basic.LineReceiver):
         self.transport.loseConnection()
 
         if self.factory.handleLostConnection is not None:
-            self.factory.handleLostConnection()
-
-
+            self.factory.handleLostConnection(reason)
 
 class ProxyEndpointProtocolFactory(protocol.Factory):
 
@@ -100,36 +95,27 @@ class ProxyEndpointProtocolFactory(protocol.Factory):
 
     def buildProtocol(self, *args, **kw):
         self.protocolInstance = protocol.Factory.buildProtocol(self, *args, **kw)
-        self.protocolInstance.label = self.label
 
         if self.peerFactory.protocolInstance is not None:
             self.protocolInstance.setPeer(self.peerFactory.protocolInstance)
 
         return self.protocolInstance
 
+class EndpointServerProxy(object):
+    def __init__(self, client_endpoint, server_endpoint):
+        self.client_endpoint = client_endpoint
+        self.server_endpoint = server_endpoint
 
+    def start(self):
+        self.start_server()
 
-class EndpointCrossOver(object):
+    def start_server(self):
+        self.server_factory = ProxyEndpointProtocolFactory(handleLostConnection=self.handle_error, label="tor-control-client")
+        self.client_factory = ProxyEndpointProtocolFactory(handleLostConnection=self.handle_error, label="server")
+        self.server_factory.setPeerFactory(self.client_factory)
+        self.client_factory.setPeerFactory(self.server_factory)
+        self.server_d = self.server_endpoint.listen(self.server_factory)
+        self.client_d = self.client_endpoint.connect(self.client_factory)
 
-    def __init__(self, endpoint1, endpoint2, handleError=None):
-        self.endpoint1 = endpoint1
-        self.endpoint2 = endpoint2
-        self.handleError = handleError
-
-    def _openEndpoint(self, endpoint, factory):
-        if IStreamClientEndpoint.providedBy(endpoint):
-            d = endpoint.connect(factory)
-        elif IStreamServerEndpoint.providedBy(endpoint):
-            d = endpoint.listen(factory)
-        else:
-            raise ValueError('must provide either IStreamClientEndpoint or IStreamServerEndpoint')
-
-    def join(self):
-        self.factory1 = ProxyEndpointProtocolFactory(handleLostConnection=self.handleError, label="A")
-        self.factory2 = ProxyEndpointProtocolFactory(handleLostConnection=self.handleError, label="B")
-
-        self.factory1.setPeerFactory(self.factory2)
-        self.factory2.setPeerFactory(self.factory1)
-
-        self._openEndpoint(self.endpoint1, self.factory1)
-        self._openEndpoint(self.endpoint2, self.factory2)
+    def handle_error(self, failure):
+        print "handle_error: failure: %r" % (failure,)
